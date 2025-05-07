@@ -1,10 +1,8 @@
-
 from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 import numpy as np
 import cv2
 import time
 import matplotlib.pyplot as plt
-
 
 print("Bağlantı kuruluyor...")
 client = RemoteAPIClient()
@@ -27,12 +25,16 @@ linetracer = sim.getObject('/LineTracer')
 
 # === Parameters ===
 dmax = 0.35
-Kp, Kd, Ki = 0.25, 0.07, 0.0001
-
+Kp, Kd, Ki =  0.2, 0.02,  0.004
 e_old = 0
 e_integral = 0
-v_base = 0.4
-d_obstacle=0.2
+v_base = 0.55
+d_obstacle = 0.2
+lap1_time = None
+lap2_time = None
+start_time = None
+lap_counter = 0
+
 def get_image(sensor):
     img, res = sim.getVisionSensorImg(sensor)
     if img:
@@ -48,47 +50,34 @@ def get_distance(sensor):
     state, point, *_ = sim.readProximitySensor(sensor)
     return np.linalg.norm(point) if state else dmax
 
+def has_crossed_start(pos):
+    return -0.2 < pos[0] < 0.2 and -0.2 < pos[1] < 0.2
+
 def execute():
-    global e_old, e_integral
+    global e_old, e_integral, lap1_time, lap2_time, start_time, lap_counter
     state = "LINE_FOLLOWING"
     vL_list, vR_list, px, py = [], [], [], []
-
     plt.ion()
     fig, (ax1, ax2) = plt.subplots(2, 1)
-
-    
-    start_time = time.time()
-    lap1_recorded = False
-    lap2_recorded = False
-
-    def distance_from_start(pos):
-        return (pos[0]**2 + pos[1]**2)**0.5
-
+    print("Starting execution...")
     while sim.getSimulationState() != sim.simulation_stopped:
         pos = sim.getObjectPosition(linetracer, -1)
         px.append(pos[0])
         py.append(pos[1])
 
-        current_dist = distance_from_start(pos)
-        now = time.time()
-
-        if not lap1_recorded and current_dist < 0.1 and now - start_time > 3:
-            print(f"1st Lap Time: {now - start_time:.2f} sec")
-            lap1_time = now - start_time
-            lap1_recorded = True
-
-        if lap1_recorded and not lap2_recorded and current_dist < 0.1 and now - start_time > 8:
-            print(f"2nd Lap Time: {now - start_time:.2f} sec")
-            lap2_time = now - start_time
-            lap2_recorded = True
-
-        pos = sim.getObjectPosition(linetracer, -1)
-        px.append(pos[0])
-        py.append(pos[1])
+        if lap_counter < 2 and has_crossed_start(pos):
+            if lap_counter == 0:
+                lap1_time = time.time() - start_time
+                print(f"1st lap completed in {lap1_time:.2f} seconds")
+            elif lap_counter == 1:
+                lap2_time = time.time() - start_time
+                print(f"2nd lap completed in {lap2_time:.2f} seconds")
+            lap_counter += 1
+            time.sleep(1.0)
 
         d = get_distance(proximity_sensor)
         imgL, imgM, imgR = sensor_ir(sensors["left"]), sensor_ir(sensors["mid"]), sensor_ir(sensors["right"])
-        
+
         if state == "LINE_FOLLOWING":
             if d < d_obstacle:
                 print("Obstacle detected")
@@ -106,8 +95,7 @@ def execute():
             elif imgM and not imgL and not imgR:
                 e_new = 0
             else:
-                e_new = e_old  # fallback
-
+                e_new = 0
 
             adaptive_Kp = Kp * 1.5 if abs(e_new) > 0 else Kp
             adaptive_Kd = Kd * 1.5 if abs(e_new) > 0 else Kd
@@ -126,7 +114,7 @@ def execute():
             vR_list.append(vR)
 
         elif state == "OBSTACLE_AVOIDANCE":
-            print("Avoiding obstacle: turning + moving forward.")
+            print("Avoiding obstacle from the right.")
             sim.setJointTargetVelocity(motors["left"], 0.5)
             sim.setJointTargetVelocity(motors["right"], -0.5)
             time.sleep(0.5)
@@ -147,8 +135,8 @@ def execute():
                 imgL, imgM, imgR = sensor_ir(sensors["left"]), sensor_ir(sensors["mid"]), sensor_ir(sensors["right"])
                 found_line = not((imgL or imgR) and imgM)
 
-                sim.setJointTargetVelocity(motors["left"], 0.25)
-                sim.setJointTargetVelocity(motors["right"], -0.25)
+                sim.setJointTargetVelocity(motors["left"], -0.25)
+                sim.setJointTargetVelocity(motors["right"], 0.25)
 
                 if d < d_obstacle:
                     print("Obstacle detected during search")
@@ -161,8 +149,8 @@ def execute():
                 time.sleep(0.01)
             else:
                 print("Line search failed. Trying alternative avoidance.")
-                sim.setJointTargetVelocity(motors["left"], 0.5)
-                sim.setJointTargetVelocity(motors["right"], -0.5)
+                sim.setJointTargetVelocity(motors["left"], -0.5)
+                sim.setJointTargetVelocity(motors["right"], 0.5)
                 time.sleep(0.5)
                 state = "LINE_SEARCH"
                 search_start_time = time.time()
@@ -173,27 +161,21 @@ def execute():
             while found_line:
                 if imgL and not imgM and not imgR:
                     sim.setJointTargetVelocity(motors["left"], 0.1)
-                    sim.setJointTargetVelocity(motors["right"],  0.3)
-                    print("align right.")
+                    sim.setJointTargetVelocity(motors["right"], 0.3)
                 elif imgR and not imgM and not imgL:
                     sim.setJointTargetVelocity(motors["left"], 0.3)
-                    sim.setJointTargetVelocity(motors["right"], 0.1 )
-                    print("align left.")
+                    sim.setJointTargetVelocity(motors["right"], 0.1)
                 elif imgL and imgM:
-                    sim.setJointTargetVelocity(motors["left"],0.1 )
+                    sim.setJointTargetVelocity(motors["left"], 0.1)
                     sim.setJointTargetVelocity(motors["right"], 0.2)
-                    print("align slightly right.")
                 elif imgR and imgM:
                     sim.setJointTargetVelocity(motors["left"], 0.2)
                     sim.setJointTargetVelocity(motors["right"], 0.1)
-                    print("align slightly left.")
                 time.sleep(0.01)
                 imgL, imgM, imgR = sensor_ir(sensors["left"]), sensor_ir(sensors["mid"]), sensor_ir(sensors["right"])
                 found_line = not((imgL or imgR) and imgM)
             state = "LINE_FOLLOWING"
             print("Alignment complete, switching to line following.")
-            continue
-
 
         img = get_image(vision_sensor)
         if img is not None:
@@ -217,12 +199,13 @@ def execute():
 
         plt.pause(0.0001)
 
-    fig.savefig("robot_path.png")
     cv2.destroyAllWindows()
 
 def start_simulation():
+    global start_time
     sim.startSimulation()
     time.sleep(1)
+    start_time = time.time()
     execute()
     sim.stopSimulation()
 

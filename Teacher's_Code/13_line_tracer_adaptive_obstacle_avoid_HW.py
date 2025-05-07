@@ -5,7 +5,6 @@ import cv2
 import time
 import matplotlib.pyplot as plt
 
-
 print("Bağlantı kuruluyor...")
 client = RemoteAPIClient()
 sim = client.require('sim')
@@ -27,11 +26,10 @@ linetracer = sim.getObject('/LineTracer')
 
 # === Parameters ===
 dmax = 0.35
-Kp, Kd, Ki = 0.25, 0.07, 0.0001
-
+Kp, Kd, Ki =  0.18, 0.015 ,  0.004
 e_old = 0
 e_integral = 0
-v_base = 0.4
+v_base = 0.5
 d_obstacle=0.2
 def get_image(sensor):
     img, res = sim.getVisionSensorImg(sensor)
@@ -56,32 +54,7 @@ def execute():
     plt.ion()
     fig, (ax1, ax2) = plt.subplots(2, 1)
 
-    
-    start_time = time.time()
-    lap1_recorded = False
-    lap2_recorded = False
-
-    def distance_from_start(pos):
-        return (pos[0]**2 + pos[1]**2)**0.5
-
     while sim.getSimulationState() != sim.simulation_stopped:
-        pos = sim.getObjectPosition(linetracer, -1)
-        px.append(pos[0])
-        py.append(pos[1])
-
-        current_dist = distance_from_start(pos)
-        now = time.time()
-
-        if not lap1_recorded and current_dist < 0.1 and now - start_time > 3:
-            print(f"1st Lap Time: {now - start_time:.2f} sec")
-            lap1_time = now - start_time
-            lap1_recorded = True
-
-        if lap1_recorded and not lap2_recorded and current_dist < 0.1 and now - start_time > 8:
-            print(f"2nd Lap Time: {now - start_time:.2f} sec")
-            lap2_time = now - start_time
-            lap2_recorded = True
-
         pos = sim.getObjectPosition(linetracer, -1)
         px.append(pos[0])
         py.append(pos[1])
@@ -106,7 +79,7 @@ def execute():
             elif imgM and not imgL and not imgR:
                 e_new = 0
             else:
-                e_new = e_old  # fallback
+                e_new = 0  # fallback
 
 
             adaptive_Kp = Kp * 1.5 if abs(e_new) > 0 else Kp
@@ -127,8 +100,8 @@ def execute():
 
         elif state == "OBSTACLE_AVOIDANCE":
             print("Avoiding obstacle: turning + moving forward.")
-            sim.setJointTargetVelocity(motors["left"], 0.5)
-            sim.setJointTargetVelocity(motors["right"], -0.5)
+            sim.setJointTargetVelocity(motors["left"], -0.5)
+            sim.setJointTargetVelocity(motors["right"], 0.5)
             time.sleep(0.5)
 
             sim.setJointTargetVelocity(motors["left"], 0.5)
@@ -217,7 +190,6 @@ def execute():
 
         plt.pause(0.0001)
 
-    fig.savefig("robot_path.png")
     cv2.destroyAllWindows()
 
 def start_simulation():

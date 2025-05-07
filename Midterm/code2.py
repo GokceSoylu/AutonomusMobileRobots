@@ -1,10 +1,8 @@
-
 from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 import numpy as np
 import cv2
 import time
 import matplotlib.pyplot as plt
-
 
 print("Bağlantı kuruluyor...")
 client = RemoteAPIClient()
@@ -27,12 +25,12 @@ linetracer = sim.getObject('/LineTracer')
 
 # === Parameters ===
 dmax = 0.35
-Kp, Kd, Ki = 0.25, 0.07, 0.0001
-
+Kp, Kd, Ki = 0.35, 0.05, 0.0005
 e_old = 0
 e_integral = 0
 v_base = 0.4
-d_obstacle=0.2
+d_obstacle = 0.2
+
 def get_image(sensor):
     img, res = sim.getVisionSensorImg(sensor)
     if img:
@@ -48,6 +46,10 @@ def get_distance(sensor):
     state, point, *_ = sim.readProximitySensor(sensor)
     return np.linalg.norm(point) if state else dmax
 
+def stop_robot():
+    sim.setJointTargetVelocity(motors["left"], 0)
+    sim.setJointTargetVelocity(motors["right"], 0)
+
 def execute():
     global e_old, e_integral
     state = "LINE_FOLLOWING"
@@ -56,7 +58,6 @@ def execute():
     plt.ion()
     fig, (ax1, ax2) = plt.subplots(2, 1)
 
-    
     start_time = time.time()
     lap1_recorded = False
     lap2_recorded = False
@@ -82,16 +83,12 @@ def execute():
             lap2_time = now - start_time
             lap2_recorded = True
 
-        pos = sim.getObjectPosition(linetracer, -1)
-        px.append(pos[0])
-        py.append(pos[1])
-
         d = get_distance(proximity_sensor)
         imgL, imgM, imgR = sensor_ir(sensors["left"]), sensor_ir(sensors["mid"]), sensor_ir(sensors["right"])
-        
+
         if state == "LINE_FOLLOWING":
             if d < d_obstacle:
-                print("Obstacle detected")
+                print("Obstacle detected ahead! Switching to OBSTACLE_AVOIDANCE.")
                 state = "OBSTACLE_AVOIDANCE"
                 continue
 
@@ -106,18 +103,14 @@ def execute():
             elif imgM and not imgL and not imgR:
                 e_new = 0
             else:
-                e_new = e_old  # fallback
-
-
-            adaptive_Kp = Kp * 1.5 if abs(e_new) > 0 else Kp
-            adaptive_Kd = Kd * 1.5 if abs(e_new) > 0 else Kd
+                e_new = e_old  # last known error
 
             e_integral += e_new
-            correction = adaptive_Kp * e_new + adaptive_Kd * (e_new - e_old) + Ki * e_integral
+            correction = Kp * e_new + Kd * (e_new - e_old) + Ki * e_integral
             e_old = e_new
 
-            vL = v_base - correction
-            vR = v_base + correction
+            vL = max(min(v_base - correction, 1.0), -1.0)
+            vR = max(min(v_base + correction, 1.0), -1.0)
 
             sim.setJointTargetVelocity(motors["left"], vL)
             sim.setJointTargetVelocity(motors["right"], vR)
@@ -126,74 +119,72 @@ def execute():
             vR_list.append(vR)
 
         elif state == "OBSTACLE_AVOIDANCE":
-            print("Avoiding obstacle: turning + moving forward.")
-            sim.setJointTargetVelocity(motors["left"], 0.5)
-            sim.setJointTargetVelocity(motors["right"], -0.5)
-            time.sleep(0.5)
+            print("Avoiding obstacle: turning right, then moving forward.")
+            # Sağ dönüş
+            sim.setJointTargetVelocity(motors["left"], 0.4)
+            sim.setJointTargetVelocity(motors["right"], -0.4)
+            time.sleep(0.6)
 
-            sim.setJointTargetVelocity(motors["left"], 0.5)
-            sim.setJointTargetVelocity(motors["right"], 0.5)
+            # İleri hareket
+            sim.setJointTargetVelocity(motors["left"], 0.4)
+            sim.setJointTargetVelocity(motors["right"], 0.4)
+            time.sleep(0.6)
+
+            # Sol dönüş (geri hatta yaklaşmak için)
+            sim.setJointTargetVelocity(motors["left"], -0.4)
+            sim.setJointTargetVelocity(motors["right"], 0.4)
             time.sleep(0.6)
 
             state = "LINE_SEARCH"
             search_start_time = time.time()
 
         elif state == "LINE_SEARCH":
-            print("Line search mode. Rotating")
-            search_duration = 5.0
+            print("Line search mode. Rotating to find the line.")
+            search_duration = 4.0
 
             while time.time() - search_start_time < search_duration:
                 d = get_distance(proximity_sensor)
                 imgL, imgM, imgR = sensor_ir(sensors["left"]), sensor_ir(sensors["mid"]), sensor_ir(sensors["right"])
-                found_line = not((imgL or imgR) and imgM)
 
                 sim.setJointTargetVelocity(motors["left"], 0.25)
                 sim.setJointTargetVelocity(motors["right"], -0.25)
 
                 if d < d_obstacle:
-                    print("Obstacle detected during search")
+                    print("Obstacle detected during search. Switching to OBSTACLE_AVOIDANCE.")
                     state = "OBSTACLE_AVOIDANCE"
                     break
-                elif found_line:
-                    print("Line found")
+                elif imgM:
+                    print("Line found!")
                     state = "LINE_ALIGNMENT"
                     break
+
                 time.sleep(0.01)
             else:
-                print("Line search failed. Trying alternative avoidance.")
-                sim.setJointTargetVelocity(motors["left"], 0.5)
-                sim.setJointTargetVelocity(motors["right"], -0.5)
+                print("Line not found. Rotating in place.")
+                sim.setJointTargetVelocity(motors["left"], -0.25)
+                sim.setJointTargetVelocity(motors["right"], 0.25)
                 time.sleep(0.5)
-                state = "LINE_SEARCH"
                 search_start_time = time.time()
 
         elif state == "LINE_ALIGNMENT":
-            imgL, imgM, imgR = sensor_ir(sensors["left"]), sensor_ir(sensors["mid"]), sensor_ir(sensors["right"])
-            found_line = 1
-            while found_line:
-                if imgL and not imgM and not imgR:
-                    sim.setJointTargetVelocity(motors["left"], 0.1)
-                    sim.setJointTargetVelocity(motors["right"],  0.3)
-                    print("align right.")
-                elif imgR and not imgM and not imgL:
-                    sim.setJointTargetVelocity(motors["left"], 0.3)
-                    sim.setJointTargetVelocity(motors["right"], 0.1 )
-                    print("align left.")
-                elif imgL and imgM:
-                    sim.setJointTargetVelocity(motors["left"],0.1 )
-                    sim.setJointTargetVelocity(motors["right"], 0.2)
-                    print("align slightly right.")
-                elif imgR and imgM:
-                    sim.setJointTargetVelocity(motors["left"], 0.2)
-                    sim.setJointTargetVelocity(motors["right"], 0.1)
-                    print("align slightly left.")
-                time.sleep(0.01)
+            print("Aligning with line...")
+            while True:
                 imgL, imgM, imgR = sensor_ir(sensors["left"]), sensor_ir(sensors["mid"]), sensor_ir(sensors["right"])
-                found_line = not((imgL or imgR) and imgM)
-            state = "LINE_FOLLOWING"
-            print("Alignment complete, switching to line following.")
-            continue
 
+                if imgM and (not imgL and not imgR):
+                    print("Line alignment complete.")
+                    state = "LINE_FOLLOWING"
+                    break
+                elif imgL:
+                    sim.setJointTargetVelocity(motors["left"], 0.1)
+                    sim.setJointTargetVelocity(motors["right"], 0.3)
+                elif imgR:
+                    sim.setJointTargetVelocity(motors["left"], 0.3)
+                    sim.setJointTargetVelocity(motors["right"], 0.1)
+                else:
+                    sim.setJointTargetVelocity(motors["left"], 0.2)
+                    sim.setJointTargetVelocity(motors["right"], 0.2)
+                time.sleep(0.01)
 
         img = get_image(vision_sensor)
         if img is not None:
@@ -223,8 +214,11 @@ def execute():
 def start_simulation():
     sim.startSimulation()
     time.sleep(1)
-    execute()
-    sim.stopSimulation()
+    try:
+        execute()
+    finally:
+        stop_robot()
+        sim.stopSimulation()
 
 if __name__ == '__main__':
     start_simulation()
