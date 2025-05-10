@@ -20,10 +20,8 @@ proximity_sensor = sim.getObject('/LineTracer/Proximity_sensor')
 robot_handle = sim.getObject('/LineTracer')
 
 # PID parametreleri
-Kp = 0.5
-Ki = 0.0
-Kd = 0.2
-v_base = 2.0
+Kp, Kd, Ki = 00.18, 0.015 ,  0.004
+v_base = 1.0
 
 # Yardımcı değişkenler
 last_error = 0
