@@ -20,9 +20,23 @@ motors = {"left": -1, "right": -1}
 aruco_sensor_handle = -1
 
 # === Parametreler ===
-linear_speed = 0.2
-angular_speed = 0.1
-distance_threshold = 0.1
+linear_speed = 0.4
+angular_speed = 0.2
+distance_threshold = 0.2
+   #marker 0; x = 1.500 y=1.500  z= -0.0009
+    #marker 42 =  x = -1.500 y= 1.500  z=-0.0009
+    #marker 48;  x = -1.500 y= -1.500  z= -0.0009
+    #marker 6 =  x = 1.500 y= -1.500  z=-0.0009
+# === Sabit İşaretçi Konumları (Global Koordinatlar) ===
+marker_positions = {
+    0: np.array([1.500 ,1.500  , -0.0009]),
+    42: np.array([-1.500 , 1.500  ,-0.0009]),
+    48: np.array([ -1.500 ,-1.500 , -0.0009]),
+    6: np.array([ 1.500 , -1.500  ,-0.0009]),
+    45: np.array([-1.500, 0.000, -0.0009]),
+    3: np.array([1.500, 0.000, -0.0009]),
+    24: np.array([0.000, 0.000, -0.0009]) # Başlangıç ve bitiş noktası
+}
 
 def get_object_by_name(name):
     """İsme göre objeyi bulur."""
@@ -72,95 +86,67 @@ def get_robot_pose(robot_handle):
     return np.array([robot_position[0], robot_position[1], robot_orientation[2]])
 
 def navigate_to_marker(target_id, robot_handle, sensor_handle):
-    """Belirli bir ID'ye sahip işaretçiye doğru robotu hareket ettirir."""
-    angular_speed_factor = 2.0  # Dönüş hızını kontrol etmek için faktör (daha da artırıldı)
-    angle_threshold_for_move = 0.03 # İlerlemeye başlamak için açı eşiği (daha da azaltıldı)
-    linear_speed = 0.4 # İlerleme hızı (artırıldı)
-    angular_speed = 0.8 # Temel dönüş hızı (artırıldı)
-    distance_threshold = 0.1
+    angular_speed_factor = 1.5
+    angle_threshold_for_move = 0.1  # Hassasiyet çok düşükse robot dönmez
+    linear_speed = 1.0              # Daha hızlı ilerle
+    angular_speed = 0.2             # Daha hızlı dön
+
+    if target_id not in marker_positions:
+        print(f"Hata: Hedef ID {target_id} için sabit konum bulunamadı.")
+        return False
+
+    target_position = marker_positions[target_id][:2]
+
     while True:
-        detected_markers = get_detected_markers(sensor_handle)
         robot_pose = get_robot_pose(robot_handle)
+        dx = target_position[0] - robot_pose[0]
+        dy = target_position[1] - robot_pose[1]
+        distance_to_target = np.sqrt(dx**2 + dy**2)
+        angle_to_target_global = np.arctan2(dy, dx)
+        angle_difference = angle_to_target_global - robot_pose[2]
+        angle_difference = (angle_difference + np.pi) % (2 * np.pi) - np.pi
 
-        # Kamera görüntüsünü göster (hata ayıklama için)
-        img = get_image(sensor_handle)
-        if img is not None:
-            cv2.imshow('Kamera Görüntüsü', img)
-            cv2.waitKey(1)
+        print(f"[{target_id}] Poz: {robot_pose[:2]} -> Fark: {angle_difference:.2f}, Mesafe: {distance_to_target:.2f}")
 
-        print(f"Algılanan İşaretçiler: {detected_markers}") # BU SATIR EKLENDİ
+        if distance_to_target < distance_threshold:
+            set_motor_velocities(0, 0)
+            print(f"Hedefe ulaşıldı: {target_id}")
+            return True
 
-        target_marker = None
-        for marker in detected_markers:
-            if marker['id'] == target_id:
-                target_marker = marker
-                break
-
-        if target_marker:
-            # Hedefin robot referansına göre göreli pozisyonu
-            dx = target_marker['pose'][0]
-            dy = target_marker['pose'][1]
-            distance_to_target = np.sqrt(dx**2 + dy**2)
-            angle_to_target = np.arctan2(dy, dx)
-            robot_orientation = robot_pose[2]
-            angle_difference = angle_to_target - robot_orientation
-            angle_difference = (angle_difference + np.pi) % (2 * np.pi) - np.pi # -pi ile pi arasına normalleştir
-
-            print(f"Hedef {target_id} algılandı. Mesafe: {distance_to_target:.2f}, Açı Farkı: {angle_difference:.2f}")
-
-            # Hıza bağlı lineer hız ayarı
-            current_linear_speed = linear_speed * (distance_to_target / 0.5) # Örnek: 0.5 metreye yaklaştıkça hızı azalt
-            current_linear_speed = max(0.05, min(linear_speed, current_linear_speed)) # Minimum ve maksimum hız sınırları
-
-            if abs(angle_difference) > angle_threshold_for_move:  # Hedefe dön
-                turn_speed = angular_speed * angle_difference * angular_speed_factor
-                set_motor_velocities(-turn_speed, turn_speed)
-                print(f"Dönüyor. Açı farkı: {angle_difference:.2f}, Dönüş Hızı: {turn_speed:.2f}")
-            elif distance_to_target > distance_threshold:  # Hedefe git
-                set_motor_velocities(current_linear_speed, current_linear_speed)
-                print(f"İlerliyor. Mesafe: {distance_to_target:.2f}, Hız: {current_linear_speed:.2f}")
-            else:
-                set_motor_velocities(0, 0)
-                print(f"Hedef işaretçi {target_id}'ye ulaşıldı.")
-                return True
-            time.sleep(0.1)
+        if abs(angle_difference) > angle_threshold_for_move:
+            turn_speed = angular_speed * np.sign(angle_difference)
+            set_motor_velocities(-turn_speed, turn_speed)
+            print(f"Dönüyor -> Hız: {turn_speed:.2f}")
         else:
-            # Eğer hedef işaretçi algılanmadıysa, dönmeye devam et (daha hızlı)
-            set_motor_velocities(-angular_speed * 0.5, angular_speed * 0.5)
-            print(f"Hedef {target_id} algılanamadı, dönüyor...")
-            time.sleep(0.1)
+            set_motor_velocities(linear_speed, linear_speed)
+            print(f"İlerliyor -> Hız: {linear_speed:.2f}")
+
+        time.sleep(0.05)
+ 
 
 def draw_letters(marker_list, robot_handle, sensor_handle):
     current_target_index = 0
-    print(f"Harf çizimi başlatılıyor. Hedefler: {marker_list}")
+    print(f"Harf çizimi başlatılıyor (konuma göre). Hedefler: {marker_list}")
     while current_target_index < len(marker_list):
         target_marker_id = marker_list[current_target_index]
-        print(f"Şu anki hedef: İşaretçi {target_marker_id}")
+        print(f"Şu anki hedef (konuma göre): İşaretçi {target_marker_id}")
         if navigate_to_marker(target_marker_id, robot_handle, sensor_handle):
             current_target_index += 1
         time.sleep(1)
-    print("Harf çizimi tamamlandı.")
+    print("Harf çizimi tamamlandı (konuma göre).")
     set_motor_velocities(0, 0)
 
 def navigate_student_id(marker_list, robot_handle, sensor_handle):
     current_target_index = 0
-    print(f"Öğrenci numarasına göre navigasyon başlatılıyor. Hedefler: {marker_list}")
+    print(f"Öğrenci numarasına göre navigasyon başlatılıyor (konuma göre). Hedefler: {marker_list}")
     while current_target_index < len(marker_list):
         target_marker_id = marker_list[current_target_index]
-        print(f"Şu anki hedef: İşaretçi {target_marker_id}")
-        detected = False
-        for marker in get_detected_markers(sensor_handle):
-            if marker['id'] == target_marker_id:
-                detected = True
-                break
-        if detected:
-            print(f"İşaretçi {target_marker_id} algılandı.")
+        print(f"Şu anki hedef (konuma göre): İşaretçi {target_marker_id}")
+        # Konuma göre navigasyon yapıldığı için sensör bilgisine gerek yok
+        if navigate_to_marker(target_marker_id, robot_handle, sensor_handle):
             current_target_index += 1
-        else:
-            print(f"Uyarı: İşaretçi {target_marker_id} algılanamadı.")
-            time.sleep(2)
         time.sleep(1)
-    print("Öğrenci numarasına göre navigasyon tamamlandı.")
+    print("Öğrenci numarasına göre navigasyon tamamlandı (konuma göre).")
     set_motor_velocities(0, 0)
 
 def execute():
@@ -180,10 +166,10 @@ def execute():
         print(f"ArUco Kamera Handle: {aruco_sensor_handle}")
         return
 
-    # Görev tanımları
-    target_markers_c = [ 42, 48, 6] # İlk hedef 28 olarak değiştirildi (örnek)
-    target_markers_s = [0, 42, 45, 3, 6, 48]
-    target_markers_student = [24, 24]
+    # Görev tanımları (DOĞRU SIRADA)
+    target_markers_c = [24, 0, 42, 48, 6, 24]
+    target_markers_s = [24, 0, 42, 45, 3, 6, 48, 24]
+    target_markers_student = [24]
 
     # Görev sırası
     draw_letters(target_markers_c, robot_handle, aruco_sensor_handle)
@@ -203,3 +189,8 @@ def start_simulation():
 
 if __name__ == '__main__':
     start_simulation()
+
+    #marker 0; x = 1.500 y=1.500  z= -0.0009
+    #marker 42 =  x = -1.500 y= 1.500  z=-0.0009
+    #marker 48;  x = -1.500 y= -1.500  z= -0.0009
+    #marker 6 =  x = 1.500 y= -1.500  z=-0.0009

@@ -86,10 +86,10 @@ def get_robot_pose(robot_handle):
     return np.array([robot_position[0], robot_position[1], robot_orientation[2]])
 
 def navigate_to_marker(target_id, robot_handle, sensor_handle):
-    angular_speed_factor = 2.0
-    angle_threshold_for_move = 0.01 # Daha hassas dönüş için eşiği düşürdüm
-    linear_speed = 0.1         # İlerlemeyi biraz açtım
-    angular_speed = 0.05
+    angular_speed_factor = 1.5
+    angle_threshold_for_move = 0.1
+    linear_speed = 1.0
+    angular_speed = 0.2
 
     if target_id not in marker_positions:
         print(f"Hata: Hedef ID {target_id} için sabit konum bulunamadı.")
@@ -102,24 +102,32 @@ def navigate_to_marker(target_id, robot_handle, sensor_handle):
         dx = target_position[0] - robot_pose[0]
         dy = target_position[1] - robot_pose[1]
         distance_to_target = np.sqrt(dx**2 + dy**2)
-        angle_to_target_global = np.arctan2(dy, dx)
-        angle_difference = angle_to_target_global - robot_pose[2]
-        angle_difference = (angle_difference + np.pi) % (2 * np.pi) - np.pi
 
-        print(f"Hedef: {target_id}, Robot Açısı: {robot_pose[2]:.2f}, Hedef Açı: {angle_to_target_global:.2f}, Açı Farkı: {angle_difference:.2f}, Mesafe: {distance_to_target:.2f}")
+        heading_vector = np.array([np.cos(robot_pose[2]), np.sin(robot_pose[2])])
+        target_vector = np.array([dx, dy])
+        target_vector /= np.linalg.norm(target_vector)
+
+        angle_difference = np.arctan2(
+            heading_vector[0]*target_vector[1] - heading_vector[1]*target_vector[0],
+            heading_vector[0]*target_vector[0] + heading_vector[1]*target_vector[1]
+        )
+
+        print(f"[{target_id}] Poz: {robot_pose[:2]} -> Fark: {angle_difference:.2f}, Mesafe: {distance_to_target:.2f}")
+
+        if distance_to_target < distance_threshold:
+            set_motor_velocities(0, 0)
+            print(f"Hedefe ulaşıldı: {target_id}")
+            return True
 
         if abs(angle_difference) > angle_threshold_for_move:
-            turn_speed = angular_speed * angle_difference * angular_speed_factor
+            turn_speed = angular_speed * np.sign(angle_difference)
             set_motor_velocities(-turn_speed, turn_speed)
-            print(f"Dönüyor. Hız: {turn_speed:.2f}")
-        elif distance_to_target > distance_threshold:
-            set_motor_velocities(linear_speed, linear_speed)
-            print(f"İlerliyor. Hız: {linear_speed:.2f}")
         else:
-            set_motor_velocities(0, 0)
-            print(f"Hedef {target_id}'ye ulaşıldı.")
-            return True
-        time.sleep(0.1)
+            set_motor_velocities(linear_speed, linear_speed)
+
+        time.sleep(0.05)
+
+ 
 
 def draw_letters(marker_list, robot_handle, sensor_handle):
     current_target_index = 0
